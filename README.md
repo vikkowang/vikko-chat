@@ -149,6 +149,30 @@ curl -X POST http://localhost:8080/api/chat \
 
 一句话:函数调用是「模型直接调」;MCP 是「跨进程/跨服务的协议调用」——Server 是把工具**卖**出去,Client 是把工具**买**进来。
 
+## Roadmap(后续计划)
+
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| Tool Calling(函数调用) | ✅ 已完成 | `DemoTools` 5 个 `@Tool`,DeepSeek 按需调用 |
+| MCP Server | ✅ 已完成 | 把本进程工具经 `/mcp` 暴露给外部客户端 |
+| MCP Client | ✅ 已完成 | 连钉钉文档 MCP 网关,40 个远程工具接进对话 |
+| 多轮对话记忆 | ✅ 已完成 | `ChatMemory` + JDBC 持久化到 MySQL |
+| 流式输出(SSE) | ✅ 已完成 | `/memory/stream` 打字机式返回 |
+| Web 前端 | ✅ 已完成 | Vue 3,会话侧边栏 + 流式聊天 |
+| RAG(向量检索)⭐ | ⬜ 待做 | Docker + Milvus;切分 / embedding / 检索 / 注入上下文 |
+| Multi-Agent 编排 | ⬜ 待做 | 单 agent 自主循环(ReAct)→ 多 agent 协作(planner + workers) |
+| 上下文管理 | ⬜ 待做 | 上下文压缩 / 摘要、记忆分层、长对话窗口管理、命中缓存 |
+| 结构化输出(JSON Schema) | ⬜ 待做 | 模型按 schema 返回类型化 JSON(agent 与 RAG 的地基) |
+
+⭐ = 重点学习项。
+
+### 待做项拆解
+
+- **RAG(重点)**:Docker 起 Milvus(standalone)→ 配 embedding 模型(本地 ONNX BGE 或托管 `text-embedding-3`)→ `DocumentReader` + `TokenTextSplitter` 切分 → `EmbeddingModel` 向量化 → 写入 `MilvusVectorStore` → 检索 top-k → `QuestionAnswerAdvisor` 注入上下文生成;进阶:混合检索、重排、query 改写。
+- **Multi-Agent**:先把 `DemoTools` 交给单个自主 agent(ReAct 多步推理),再用 planner + 专职 worker 做多 agent 协作。
+- **上下文管理**:在现有基础记忆之上,做上下文压缩 / 摘要、记忆分层(短期 vs 长期)、长对话窗口管理、prompt 缓存以省 token。
+- **结构化输出**:`ChatClient.prompt().entity(...)` + `BeanOutputConverter`,让模型返回受 schema 约束的对象。
+
 ## 前端
 
 前端是 Vue 3 + Vite 单页应用(`frontend/`),功能:会话侧边栏、SSE 流式聊天、Markdown / 代码高亮渲染。
