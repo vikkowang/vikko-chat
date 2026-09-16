@@ -1,0 +1,21 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### VS Code ###
+.vscode/
+
+### macOS ###
+.DS_Store
+
+### Frontend (Vue/Vite) ###
+frontend/node_modules/
+src/main/resources/static/

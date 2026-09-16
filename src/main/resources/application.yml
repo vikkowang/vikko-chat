@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: vikko-chat
+  datasource:
+    url: jdbc:mysql://localhost:3306/test?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowMultiQueries=true&serverTimezone=Asia/Shanghai
+    username: root
+    password: vikkovikko
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+  ai:
+    deepseek:
+      # 从环境变量读取,不要硬编码密钥
+      api-key: your_sk
+      chat:
+        options:
+          model: deepseek-chat
+    chat:
+      memory:
+        repository:
+          jdbc:
+            # 启动时自动建 SPRING_AI_CHAT_MEMORY 表(Spring AI 自带 schema)
+            initialize-schema: always
+    mcp:
+      server:
+        name: vikko-chat-mcp
+        version: 1.0.0
+        # STREAMABLE = 单端点 /mcp(现代 MCP 标准);默认 SSE 是 /sse + /mcp/message
+        protocol: STREAMABLE
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+server:
+  port: 8080
