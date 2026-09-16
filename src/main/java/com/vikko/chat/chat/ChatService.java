@@ -8,6 +8,7 @@ import com.vikko.chat.chat.dto.ChatRequest;
 import com.vikko.chat.chat.dto.ConversationDto;
 import com.vikko.chat.mapper.ConversationMapper;
 import com.vikko.chat.tool.DemoTools;
+import io.modelcontextprotocol.client.McpSyncClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
@@ -15,6 +16,7 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
@@ -24,6 +26,8 @@ public class ChatService {
 
     private final ChatClient chatClient;
     private final DemoTools demoTools;
+    // 钉钉文档 MCP 的远程工具,桥接成 ToolCallbackProvider 供函数调用
+    private final SyncMcpToolCallbackProvider dingTalkToolCallbackProvider;
     // 由 Spring AI 自动装配:有 JDBC 仓库时持久化到 MySQL,否则退化为内存实现
     private final ChatMemory chatMemory;
     // 直接操作底层仓库,用于列出会话/加载历史(绕开 ChatMemory 的窗口截断)
@@ -31,10 +35,11 @@ public class ChatService {
     // 会话按最近活跃时间倒序
     private final ConversationMapper conversationMapper;
 
-    public ChatService(ChatClient.Builder chatClientBuilder, DemoTools demoTools, ChatMemory chatMemory,
-            ChatMemoryRepository chatMemoryRepository, ConversationMapper conversationMapper) {
+    public ChatService(ChatClient.Builder chatClientBuilder, DemoTools demoTools, McpSyncClient dingTalkMcpClient,
+            ChatMemory chatMemory, ChatMemoryRepository chatMemoryRepository, ConversationMapper conversationMapper) {
         this.chatClient = chatClientBuilder.build();
         this.demoTools = demoTools;
+        this.dingTalkToolCallbackProvider = new SyncMcpToolCallbackProvider(dingTalkMcpClient);
         this.chatMemory = chatMemory;
         this.chatMemoryRepository = chatMemoryRepository;
         this.conversationMapper = conversationMapper;
@@ -42,13 +47,13 @@ public class ChatService {
 
     /**
      * 单轮:每次请求独立,不保留历史上下文。
-     * {@code .tools(demoTools)} 把工具注册给模型,让 DeepSeek 按需做函数调用。
+     * {@code .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)} 把工具注册给模型,让 DeepSeek 按需做函数调用。
      */
     public String chat(String message) {
         log.info("单轮对话: {}", message);
         return chatClient.prompt()
                 .user(message)
-                .tools(demoTools)
+                .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)
                 .call()
                 .content();
     }
@@ -66,7 +71,7 @@ public class ChatService {
                 .advisors(a -> a
                         .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                         .param(ChatMemory.CONVERSATION_ID, conversationId))
-                .tools(demoTools)
+                .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)
                 .call()
                 .content();
     }
@@ -83,7 +88,7 @@ public class ChatService {
                 .advisors(a -> a
                         .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                         .param(ChatMemory.CONVERSATION_ID, conversationId))
-                .tools(demoTools)
+                .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)
                 .stream()
                 .content();
     }

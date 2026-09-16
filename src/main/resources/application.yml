@@ -12,7 +12,7 @@ spring:
   ai:
     deepseek:
       # 从环境变量读取,不要硬编码密钥
-      api-key: your_sk
+      api-key: ${DEEPSEEK_API_KEY}
       chat:
         options:
           model: deepseek-chat
@@ -35,3 +35,9 @@ springdoc:
 
 server:
   port: 8080
+
+app:
+  mcp:
+    dingtalk:
+      # 钉钉文档 MCP 网关地址;末尾的 key 是访问凭证,建议后续改走环境变量
+      url: ${app.mcp.dingtalk.url}

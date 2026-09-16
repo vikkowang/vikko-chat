@@ -100,6 +100,13 @@ async function send() {
   }
 }
 
+function onEnter(e) {
+  // 中文输入法组合中(候选词未上屏)时,Enter 用于确认候选词,不发送
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  send()
+}
+
 function extractData(raw) {
   return raw
     .split('\n')
@@ -173,7 +180,7 @@ function scrollToBottom() {
             class="chat-input"
             rows="1"
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-            @keydown.enter.exact.prevent="send"
+            @keydown.enter.exact="onEnter"
           ></textarea>
           <button class="btn-send" :disabled="sending || !input.trim()" @click="send">发送</button>
         </div>

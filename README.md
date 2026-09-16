@@ -2,7 +2,7 @@
 
 一个 Spring AI 学习项目,聚焦两个核心主题:**Tool Calling(函数调用)** 与 **MCP(Model Context Protocol)**。
 
-在此基础上扩展成了一个带持久化多轮记忆和 Web 前端的小型聊天应用。
+MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**(把外部工具接进来)——后者用钉钉文档 MCP 网关做了实战演示。此外还带持久化多轮记忆和 Web 前端。
 
 ## 技术栈
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | Java | 21 |
 | Spring Boot | 3.5.16 |
-| Spring AI | 1.1.8 |
+| Spring AI | 1.1.8(含 MCP server / client starter) |
 | LLM | DeepSeek(`deepseek-chat`) |
 | 数据库 | MySQL(JDBC + MyBatis 3.0.5) |
 | 接口文档 | springdoc-openapi 2.8.17(Swagger UI) |
@@ -25,6 +25,7 @@
    ```bash
    export DEEPSEEK_API_KEY=sk-xxx
    ```
+4. (可选)钉钉文档 MCP 网关地址,已配置在 `application.yml` 的 `app.mcp.dingtalk.url`,见下文「MCP Client」一节。
 
 ## 快速开始
 
@@ -38,7 +39,7 @@
 - 聊天前端:http://localhost:8080/
 - Swagger UI:http://localhost:8080/swagger-ui.html
 - OpenAPI JSON:http://localhost:8080/v3/api-docs
-- MCP 端点:http://localhost:8080/mcp
+- MCP 端点(本应用作为 Server):http://localhost:8080/mcp
 
 ## 接口一览
 
@@ -50,7 +51,7 @@
 | GET | `/api/chat/conversations` | 会话列表 |
 | GET | `/api/chat/conversations/{conversationId}` | 加载某会话历史 |
 
-## 三个演示
+## 四个演示
 
 ### 1. Tool Calling(函数调用)
 
@@ -103,7 +104,7 @@ curl http://localhost:8080/api/chat/conversations
 curl http://localhost:8080/api/chat/conversations/conv-1
 ```
 
-### 3. MCP Server
+### 3. MCP Server(把本进程工具暴露出去)
 
 `DemoTools` 里的 `@Tool` 方法会被 `ToolConfig` 包装成 `ToolCallbackProvider`,**自动**由 MCP Server 经 MCP 协议暴露。用 MCP Inspector 验证:
 
@@ -113,13 +114,40 @@ npx @modelcontextprotocol/inspector
 
 在 Inspector 里选择 Streamable HTTP 传输,地址填 `http://localhost:8080/mcp`,即可看到上述五个工具并调用。
 
-## 核心概念:函数调用 vs MCP
+### 4. MCP Client(把外部工具接进来)
 
-- **函数调用(Tool Calling)**:模型在对话过程中,由 `ChatClient` 直接调用本进程内 `@Tool` 方法。
-- **MCP**:把工具通过标准协议(JSON-RPC + HTTP)暴露给**任意** MCP 客户端。工具先被
-  `ToolConfig` 包装成 `ToolCallbackProvider`,再由 MCP Server 暴露。
+本应用同时作为 **MCP 客户端**连接钉钉文档 MCP 网关,把远程工具桥接给 DeepSeek 做函数调用。配置在 `application.yml`:
 
-同一份 `@Tool` 实现,两条路:函数调用是「模型直接调」,MCP 是「外部客户端通过协议调」。
+```yaml
+app:
+  mcp:
+    dingtalk:
+      url: https://mcp-gw.dingtalk.com/server/<server-id>?key=<api-key>
+```
+
+`McpClientConfig` 用 `McpClient.sync(HttpClientStreamableHttpTransport.builder(...).endpoint(...))` 建立连接,`ChatService` 再用 `SyncMcpToolCallbackProvider` 把远程工具桥接成 `ToolCallback`,通过 `.toolCallbacks(...)` 与本地 `DemoTools` 一起注册。钉钉网关共暴露 **40 个文档工具**(`create_document`、`get_document_content`、`search_documents`、`list_nodes`、`add_permission` 等),覆盖文档/文件夹/知识库的增删改查、权限、版本、导入导出。
+
+可以直接问:
+
+```bash
+curl -X POST http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '"列出我最近访问的钉钉文档"'
+```
+
+> ⚠️ 两点说明:
+> - URL 末尾的 `key` 是访问凭证,建议改成环境变量(如 `${DINGTALK_MCP_URL}`)再注入。
+> - 远程工具是**惰性加载**的:应用启动时不会连钉钉,第一次真正触发工具调用时才 `listTools()`;钉钉暂时不可达不影响启动,只影响工具调用。
+
+## 核心概念:函数调用 vs MCP(Server / Client)
+
+同一批「工具」,三种用法,这是本项目想讲清的核心:
+
+- **函数调用(Tool Calling)**:模型在对话过程中,由 `ChatClient` 直接调用本进程内的 `@Tool` 方法(`DemoTools`)。
+- **MCP Server**:把本进程工具经标准协议(JSON-RPC + HTTP)暴露给**任意**外部 MCP 客户端(`ToolConfig` + `/mcp` 端点)。
+- **MCP Client**:反过来,作为客户端去连**外部** MCP Server,把它的远程工具接进自己的 `ChatClient`(`McpClientConfig` + 钉钉网关)。
+
+一句话:函数调用是「模型直接调」;MCP 是「跨进程/跨服务的协议调用」——Server 是把工具**卖**出去,Client 是把工具**买**进来。
 
 ## 前端
 
@@ -139,13 +167,14 @@ src/main/java/com/vikko/chat/
 ├── SpringAiLearnApplication.java   # 启动类
 ├── config/
 │   ├── OpenApiConfig.java          # Swagger 标题/版本
-│   └── ToolConfig.java             # 把 @Tool 包装成 ToolCallbackProvider(供 MCP 用)
+│   ├── ToolConfig.java             # MCP Server:把 @Tool 包装成 ToolCallbackProvider
+│   └── McpClientConfig.java        # MCP Client:连接钉钉文档 MCP 网关
 ├── tool/
 │   ├── DemoTools.java              # @Tool 工具集(函数调用 + MCP 共用)
 │   └── UserStatus.java             # 账户状态枚举
 ├── chat/
 │   ├── ChatController.java         # /api/chat 系列接口
-│   ├── ChatService.java            # ChatClient 装配 + 记忆
+│   ├── ChatService.java            # ChatClient 装配 + 记忆 + 远程工具桥接
 │   └── dto/                        # 请求/响应 DTO(record)
 ├── mapper/
 │   ├── ConversationMapper.java     # 会话列表(按最近活跃排序)
@@ -153,7 +182,7 @@ src/main/java/com/vikko/chat/
 └── exception/                      # 全局异常处理 + 统一错误结构
 
 src/main/resources/
-├── application.yml                 # 数据源 / DeepSeek / MCP 配置
+├── application.yml                 # 数据源 / DeepSeek / MCP(server + client)配置
 ├── schema.sql / data.sql           # user_status 建表 + 示例数据
 └── static/                         # 前端构建产物
 
@@ -165,3 +194,4 @@ frontend/                           # Vue 前端源码
 - **启动报 `Could not resolve placeholder 'DEEPSEEK_API_KEY'`**:没设置环境变量,先 `export DEEPSEEK_API_KEY=sk-xxx`。
 - **启动报数据库连接失败**:确认 MySQL 已启动、`test` 库存在、`application.yml` 里的账号密码正确。
 - **MCP Inspector 连不上**:确认应用已启动,且地址用 `http://localhost:8080/mcp`、传输选 Streamable HTTP。
+- **连钉钉 MCP 报 404 `Server Not Found`**:`HttpClientStreamableHttpTransport.builder(...)` 的参数是 baseUri,endpoint 默认 `/mcp`;若把完整 URL(含路径和 `?key=`)整个传进去,会被 `resolve("/mcp")` 覆盖路径、丢掉查询参数。需要把「主机」和「路径 + query」拆成两段传给 `.endpoint(...)`(见 `McpClientConfig`)。
