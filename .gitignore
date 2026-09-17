@@ -19,3 +19,6 @@ target/
 ### Frontend (Vue/Vite) ###
 frontend/node_modules/
 src/main/resources/static/
+
+### Docs ###
+docs/

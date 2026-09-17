@@ -2,7 +2,7 @@
 
 一个 Spring AI 学习项目,聚焦两个核心主题:**Tool Calling(函数调用)** 与 **MCP(Model Context Protocol)**。
 
-MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**(把外部工具接进来)——后者用钉钉文档 MCP 网关做了实战演示。此外还带持久化多轮记忆和 Web 前端。
+MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**(把外部工具接进来)——后者用钉钉文档 MCP 网关和本地 RAG 服务做了实战演示。此外还带持久化多轮记忆、RAG 检索增强和 Web 前端。
 
 ## 技术栈
 
@@ -25,7 +25,9 @@ MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**
    ```bash
    export DEEPSEEK_API_KEY=sk-xxx
    ```
-4. (可选)钉钉文档 MCP 网关地址,已配置在 `application.yml` 的 `app.mcp.dingtalk.url`,见下文「MCP Client」一节。
+4. (可选)两个外部 MCP Server,已配置在 `application.yml`:
+   - 钉钉文档 MCP 网关:`app.mcp.dingtalk.url`
+   - 本地 RAG 服务:`app.mcp.rag.url`(即 `vikko-rag` 项目,需单独启动)
 
 ## 快速开始
 
@@ -116,16 +118,21 @@ npx @modelcontextprotocol/inspector
 
 ### 4. MCP Client(把外部工具接进来)
 
-本应用同时作为 **MCP 客户端**连接钉钉文档 MCP 网关,把远程工具桥接给 DeepSeek 做函数调用。配置在 `application.yml`:
+本应用同时作为 **MCP 客户端**连接两个外部 MCP Server,把远程工具桥接给 DeepSeek 做函数调用。配置在 `application.yml`:
 
 ```yaml
 app:
   mcp:
     dingtalk:
       url: https://mcp-gw.dingtalk.com/server/<server-id>?key=<api-key>
+    rag:
+      url: http://127.0.0.1:9000/mcp   # 本地 RAG 服务(vikko-rag)
 ```
 
-`McpClientConfig` 用 `McpClient.sync(HttpClientStreamableHttpTransport.builder(...).endpoint(...))` 建立连接,`ChatService` 再用 `SyncMcpToolCallbackProvider` 把远程工具桥接成 `ToolCallback`,通过 `.toolCallbacks(...)` 与本地 `DemoTools` 一起注册。钉钉网关共暴露 **40 个文档工具**(`create_document`、`get_document_content`、`search_documents`、`list_nodes`、`add_permission` 等),覆盖文档/文件夹/知识库的增删改查、权限、版本、导入导出。
+`McpClientConfig` 用 `McpClient.sync(HttpClientStreamableHttpTransport.builder(...).endpoint(...))` 建立连接,`ChatService` 再用 `SyncMcpToolCallbackProvider` 把远程工具桥接成 `ToolCallback`,通过 `.toolCallbacks(...)` 与本地 `DemoTools` 一起注册。两个外部 Server 各提供:
+
+- **钉钉文档网关**:40 个文档工具(`create_document`、`get_document_content`、`search_documents`、`list_nodes`、`add_permission` 等),覆盖文档/文件夹/知识库的增删改查、权限、版本、导入导出。
+- **本地 RAG 服务**(`vikko-rag`):一个 `rag_query` 工具,基于本地 BGE + milvus-lite 检索知识库,再用 DeepSeek 生成带引用的回答(详见 `vikko-rag` 项目)。
 
 可以直接问:
 
@@ -133,11 +140,16 @@ app:
 curl -X POST http://localhost:8080/api/chat \
   -H 'Content-Type: application/json' \
   -d '"列出我最近访问的钉钉文档"'
+
+curl -X POST http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '"用本地知识库查一下 RSI 是什么"'
 ```
 
-> ⚠️ 两点说明:
-> - URL 末尾的 `key` 是访问凭证,建议改成环境变量(如 `${DINGTALK_MCP_URL}`)再注入。
-> - 远程工具是**惰性加载**的:应用启动时不会连钉钉,第一次真正触发工具调用时才 `listTools()`;钉钉暂时不可达不影响启动,只影响工具调用。
+> ⚠️ 说明:
+> - 远程工具是**惰性加载**的:应用启动时不会连外部 server,第一次真正触发工具调用时才 `listTools()`;外部 server 暂时不可达不影响启动,只影响工具调用。
+> - 钉钉 URL 末尾的 `key` 是访问凭证,建议改成环境变量再注入。
+> - RAG 服务是独立的 Python 进程,需先启动(见 `vikko-rag` 的 README)。
 
 ## 核心概念:函数调用 vs MCP(Server / Client)
 
@@ -145,7 +157,7 @@ curl -X POST http://localhost:8080/api/chat \
 
 - **函数调用(Tool Calling)**:模型在对话过程中,由 `ChatClient` 直接调用本进程内的 `@Tool` 方法(`DemoTools`)。
 - **MCP Server**:把本进程工具经标准协议(JSON-RPC + HTTP)暴露给**任意**外部 MCP 客户端(`ToolConfig` + `/mcp` 端点)。
-- **MCP Client**:反过来,作为客户端去连**外部** MCP Server,把它的远程工具接进自己的 `ChatClient`(`McpClientConfig` + 钉钉网关)。
+- **MCP Client**:反过来,作为客户端去连**外部** MCP Server,把它的远程工具接进自己的 `ChatClient`(`McpClientConfig` + 钉钉网关 / 本地 RAG 服务)。
 
 一句话:函数调用是「模型直接调」;MCP 是「跨进程/跨服务的协议调用」——Server 是把工具**卖**出去,Client 是把工具**买**进来。
 
@@ -155,11 +167,11 @@ curl -X POST http://localhost:8080/api/chat \
 | --- | --- | --- |
 | Tool Calling(函数调用) | ✅ 已完成 | `DemoTools` 5 个 `@Tool`,DeepSeek 按需调用 |
 | MCP Server | ✅ 已完成 | 把本进程工具经 `/mcp` 暴露给外部客户端 |
-| MCP Client | ✅ 已完成 | 连钉钉文档 MCP 网关,40 个远程工具接进对话 |
+| MCP Client | ✅ 已完成 | 连钉钉文档 MCP 网关(40 工具)+ 本地 RAG 服务 |
 | 多轮对话记忆 | ✅ 已完成 | `ChatMemory` + JDBC 持久化到 MySQL |
 | 流式输出(SSE) | ✅ 已完成 | `/memory/stream` 打字机式返回 |
 | Web 前端 | ✅ 已完成 | Vue 3,会话侧边栏 + 流式聊天 |
-| RAG(向量检索)⭐ | ⬜ 待做 | Docker + Milvus;切分 / embedding / 检索 / 注入上下文 |
+| RAG(向量检索)⭐ | ✅ 已完成 | vikko-rag Python 服务:本地 BGE + milvus-lite + DeepSeek,MCP 暴露 |
 | Multi-Agent 编排 | ⬜ 待做 | 单 agent 自主循环(ReAct)→ 多 agent 协作(planner + workers) |
 | 上下文管理 | ⬜ 待做 | 上下文压缩 / 摘要、记忆分层、长对话窗口管理、命中缓存 |
 | 结构化输出(JSON Schema) | ⬜ 待做 | 模型按 schema 返回类型化 JSON(agent 与 RAG 的地基) |
@@ -168,7 +180,6 @@ curl -X POST http://localhost:8080/api/chat \
 
 ### 待做项拆解
 
-- **RAG(重点)**:Docker 起 Milvus(standalone)→ 配 embedding 模型(本地 ONNX BGE 或托管 `text-embedding-3`)→ `DocumentReader` + `TokenTextSplitter` 切分 → `EmbeddingModel` 向量化 → 写入 `MilvusVectorStore` → 检索 top-k → `QuestionAnswerAdvisor` 注入上下文生成;进阶:混合检索、重排、query 改写。
 - **Multi-Agent**:先把 `DemoTools` 交给单个自主 agent(ReAct 多步推理),再用 planner + 专职 worker 做多 agent 协作。
 - **上下文管理**:在现有基础记忆之上,做上下文压缩 / 摘要、记忆分层(短期 vs 长期)、长对话窗口管理、prompt 缓存以省 token。
 - **结构化输出**:`ChatClient.prompt().entity(...)` + `BeanOutputConverter`,让模型返回受 schema 约束的对象。
@@ -192,7 +203,7 @@ src/main/java/com/vikko/chat/
 ├── config/
 │   ├── OpenApiConfig.java          # Swagger 标题/版本
 │   ├── ToolConfig.java             # MCP Server:把 @Tool 包装成 ToolCallbackProvider
-│   └── McpClientConfig.java        # MCP Client:连接钉钉文档 MCP 网关
+│   └── McpClientConfig.java        # MCP Client:连接钉钉文档 + 本地 RAG MCP
 ├── tool/
 │   ├── DemoTools.java              # @Tool 工具集(函数调用 + MCP 共用)
 │   └── UserStatus.java             # 账户状态枚举

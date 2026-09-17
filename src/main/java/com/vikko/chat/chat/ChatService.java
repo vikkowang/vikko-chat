@@ -26,8 +26,8 @@ public class ChatService {
 
     private final ChatClient chatClient;
     private final DemoTools demoTools;
-    // 钉钉文档 MCP 的远程工具,桥接成 ToolCallbackProvider 供函数调用
-    private final SyncMcpToolCallbackProvider dingTalkToolCallbackProvider;
+    // 外部 MCP 的远程工具(钉钉 + 本地 RAG),桥接成 ToolCallbackProvider 供函数调用
+    private final SyncMcpToolCallbackProvider mcpToolCallbackProvider;
     // 由 Spring AI 自动装配:有 JDBC 仓库时持久化到 MySQL,否则退化为内存实现
     private final ChatMemory chatMemory;
     // 直接操作底层仓库,用于列出会话/加载历史(绕开 ChatMemory 的窗口截断)
@@ -35,11 +35,12 @@ public class ChatService {
     // 会话按最近活跃时间倒序
     private final ConversationMapper conversationMapper;
 
-    public ChatService(ChatClient.Builder chatClientBuilder, DemoTools demoTools, McpSyncClient dingTalkMcpClient,
+    public ChatService(ChatClient.Builder chatClientBuilder, DemoTools demoTools,
+            McpSyncClient dingTalkMcpClient, McpSyncClient ragMcpClient,
             ChatMemory chatMemory, ChatMemoryRepository chatMemoryRepository, ConversationMapper conversationMapper) {
         this.chatClient = chatClientBuilder.build();
         this.demoTools = demoTools;
-        this.dingTalkToolCallbackProvider = new SyncMcpToolCallbackProvider(dingTalkMcpClient);
+        this.mcpToolCallbackProvider = new SyncMcpToolCallbackProvider(dingTalkMcpClient, ragMcpClient);
         this.chatMemory = chatMemory;
         this.chatMemoryRepository = chatMemoryRepository;
         this.conversationMapper = conversationMapper;
@@ -47,13 +48,13 @@ public class ChatService {
 
     /**
      * 单轮:每次请求独立,不保留历史上下文。
-     * {@code .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)} 把工具注册给模型,让 DeepSeek 按需做函数调用。
+     * {@code .tools(demoTools).toolCallbacks(mcpToolCallbackProvider)} 把工具注册给模型,让 DeepSeek 按需做函数调用。
      */
     public String chat(String message) {
         log.info("单轮对话: {}", message);
         return chatClient.prompt()
                 .user(message)
-                .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)
+                .tools(demoTools).toolCallbacks(mcpToolCallbackProvider)
                 .call()
                 .content();
     }
@@ -71,7 +72,7 @@ public class ChatService {
                 .advisors(a -> a
                         .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                         .param(ChatMemory.CONVERSATION_ID, conversationId))
-                .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)
+                .tools(demoTools).toolCallbacks(mcpToolCallbackProvider)
                 .call()
                 .content();
     }
@@ -88,7 +89,7 @@ public class ChatService {
                 .advisors(a -> a
                         .advisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
                         .param(ChatMemory.CONVERSATION_ID, conversationId))
-                .tools(demoTools).toolCallbacks(dingTalkToolCallbackProvider)
+                .tools(demoTools).toolCallbacks(mcpToolCallbackProvider)
                 .stream()
                 .content();
     }

@@ -41,3 +41,6 @@ app:
     dingtalk:
       # 钉钉文档 MCP 网关地址;末尾的 key 是访问凭证,建议后续改走环境变量
       url: ${app.mcp.dingtalk.url}
+    rag:
+      # 本地 RAG 服务(vikko-rag 项目,Streamable HTTP MCP)
+      url: http://127.0.0.1:9000/mcp
