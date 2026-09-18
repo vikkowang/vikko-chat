@@ -5,7 +5,7 @@ import java.util.List;
 import com.vikko.chat.chat.dto.ChatMessageDto;
 import com.vikko.chat.chat.dto.ChatRequest;
 import com.vikko.chat.chat.dto.ChatResponse;
-import com.vikko.chat.chat.dto.ConversationDto;
+import com.vikko.chat.chat.dto.ConversationPageDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.MediaType;
@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
@@ -47,9 +48,11 @@ public class ChatController {
     }
 
     @GetMapping("/conversations")
-    @Operation(summary = "会话列表", description = "列出所有已持久化的会话(标题取第一条用户消息)")
-    public List<ConversationDto> listConversations() {
-        return chatService.listConversations();
+    @Operation(summary = "会话列表", description = "按最近活跃时间倒序分页返回会话(标题取第一条用户消息)")
+    public ConversationPageDto listConversations(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return chatService.listConversations(page, size);
     }
 
     @GetMapping("/conversations/{conversationId}")

@@ -3,6 +3,7 @@ package com.vikko.chat.mapper;
 import java.util.List;
 
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
 /**
@@ -14,6 +15,7 @@ public interface ConversationMapper {
 
     @Select("SELECT conversation_id FROM SPRING_AI_CHAT_MEMORY "
             + "GROUP BY conversation_id "
-            + "ORDER BY MAX(`timestamp`) DESC")
-    List<String> findConversationIdsOrderByRecent();
+            + "ORDER BY MAX(`timestamp`) DESC "
+            + "LIMIT #{size} OFFSET #{offset}")
+    List<String> findConversationIdsOrderByRecent(@Param("offset") int offset, @Param("size") int size);
 }

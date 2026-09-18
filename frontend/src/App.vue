@@ -8,8 +8,15 @@ const messages = ref([]) // { role: 'user' | 'assistant', content: '' }
 const input = ref('')
 const sending = ref(false)
 const listEl = ref(null)
+const inputEl = ref(null)
+const convListEl = ref(null)
+const page = ref(0)
+const pageSize = 50
+const hasMore = ref(true)
+const loadingMore = ref(false)
+const refreshing = ref(false)
 
-onMounted(loadConversations)
+onMounted(refreshConversations)
 
 function uuid() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -18,13 +25,60 @@ function uuid() {
   return 'conv-' + Date.now() + '-' + Math.random().toString(16).slice(2)
 }
 
-async function loadConversations() {
+async function refreshConversations() {
+  refreshing.value = true
+  page.value = 0
+  hasMore.value = true
   try {
-    const resp = await fetch('/api/chat/conversations')
-    if (resp.ok) conversations.value = await resp.json()
+    const resp = await fetch('/api/chat/conversations?page=0&size=' + pageSize)
+    if (resp.ok) {
+      const data = await resp.json()
+      conversations.value = data.items
+      hasMore.value = data.hasMore
+      nextTick(() => {
+        if (convListEl.value) convListEl.value.scrollTop = 0
+        maybeLoadMore()
+      })
+    }
   } catch (e) {
     /* 忽略加载失败 */
+  } finally {
+    refreshing.value = false
   }
+}
+
+async function loadMore() {
+  if (loadingMore.value || refreshing.value || !hasMore.value) return
+  loadingMore.value = true
+  const next = page.value + 1
+  try {
+    const resp = await fetch('/api/chat/conversations?page=' + next + '&size=' + pageSize)
+    if (resp.ok) {
+      const data = await resp.json()
+      conversations.value = conversations.value.concat(data.items)
+      page.value = next
+      hasMore.value = data.hasMore
+      nextTick(maybeLoadMore)
+    }
+  } catch (e) {
+    /* 忽略加载失败 */
+  } finally {
+    loadingMore.value = false
+  }
+}
+
+function onConvScroll() {
+  const el = convListEl.value
+  if (!el) return
+  // 距底部不足 80px 时加载下一页
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) loadMore()
+}
+
+function maybeLoadMore() {
+  const el = convListEl.value
+  if (!el || loadingMore.value || !hasMore.value) return
+  // 内容不足以撑出滚动条时自动补拉,直到出现滚动条或没有更多
+  if (el.scrollHeight <= el.clientHeight) loadMore()
 }
 
 async function selectConversation(id) {
@@ -48,12 +102,14 @@ function newConversation() {
   conversationId.value = uuid()
   messages.value = []
   input.value = ''
+  nextTick(resizeInput)
 }
 
 async function send() {
   const text = input.value.trim()
   if (!text || sending.value) return
   input.value = ''
+  nextTick(resizeInput)
   messages.value.push({ role: 'user', content: text })
   const assistant = { role: 'assistant', content: '' }
   messages.value.push(assistant)
@@ -96,7 +152,7 @@ async function send() {
   } finally {
     sending.value = false
     scrollToBottom()
-    loadConversations()
+    refreshConversations()
   }
 }
 
@@ -124,13 +180,20 @@ function scrollToBottom() {
     if (listEl.value) listEl.value.scrollTop = listEl.value.scrollHeight
   })
 }
+
+function resizeInput() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+}
 </script>
 
 <template>
   <div class="app">
     <aside class="sidebar">
       <button class="btn-new" :disabled="sending" @click="newConversation">＋ 新对话</button>
-      <div class="conv-list">
+      <div ref="convListEl" class="conv-list" @scroll="onConvScroll">
         <div
           v-for="c in conversations"
           :key="c.conversationId"
@@ -140,6 +203,10 @@ function scrollToBottom() {
           @click="selectConversation(c.conversationId)"
         >
           {{ c.title || '新对话' }}
+        </div>
+        <div v-if="loadingMore || (conversations.length > 0 && !hasMore)" class="conv-sentinel">
+          <span v-if="loadingMore">加载中…</span>
+          <span v-else>没有更多了</span>
         </div>
         <div v-if="conversations.length === 0" class="conv-empty">暂无会话记录</div>
       </div>
@@ -176,10 +243,12 @@ function scrollToBottom() {
       <footer class="chat-footer">
         <div class="input-wrap">
           <textarea
+            ref="inputEl"
             v-model="input"
             class="chat-input"
             rows="1"
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            @input="resizeInput"
             @keydown.enter.exact="onEnter"
           ></textarea>
           <button class="btn-send" :disabled="sending || !input.trim()" @click="send">发送</button>

@@ -4,6 +4,58 @@
 
 MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**(把外部工具接进来)——后者用钉钉文档 MCP 网关和本地 RAG 服务做了实战演示。此外还带持久化多轮记忆、RAG 检索增强和 Web 前端。
 
+## Roadmap(进度总览)
+
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| Spring AI 脚手架 | ✅ | Maven + Spring Boot + Spring AI 起步,含 DeepSeek 接入、MySQL/MyBatis、全局异常、Swagger |
+| Tool Calling(函数调用) | ✅ | 本地 5 个 `@Tool`(计算/天气时间/用户状态),DeepSeek 按需调用 |
+| MCP Server / Client ⭐ | ✅ | Server 暴露本地工具;Client 接钉钉(40 工具)+ 本地 RAG |
+| 多轮记忆 + 流式 + 前端 | ✅ | `ChatMemory` + JDBC、SSE、Vue 3 |
+| RAG(基础)⭐ | ✅ | vikko-rag:本地 BGE + milvus-lite + DeepSeek,MCP 暴露 |
+| Multi-Agent 编排 ⭐ | ✅ | planner + 5 个专职 agent(检索/钉钉/计算/天气时间/用户管理),agents-as-tools |
+| ReAct 循环 ⭐ | ✅ | 手写「思考→行动→观察」循环,每步 Action/Observation 打日志,替换 ChatClient 隐式循环 |
+| 上下文管理 ⭐ | 🟡 部分 | 摘要压缩已做;长期记忆 / 增量摘要 / 窗口截断待做 |
+| RAG 进阶 ⭐ | ⬜ | 重排 / 混合检索 / 查询改写 / 切分优化 / 定时拉新 |
+| 质量与幻觉治理 | ⬜ | 幻觉检测 / 护栏 / 事实核查 |
+| 评测(Eval) | ⬜ | golden 断言 → RAG faithfulness → LLM-as-judge → CI 回归 |
+| 结构化输出 | ⬜ | JSON Schema 约束的返回 |
+| 工程化 | ⬜ | 可观测 / 模型路由 / 成本控制 |
+
+⭐ = 重点。
+
+### 待做项拆解
+
+#### RAG 进阶
+
+- **检索优化**:混合检索(BM25 + 向量双路召回)、重排(rerank 二阶段精排)、查询改写(query rewrite / HyDE)。
+- **切分优化(chunk)**:语义切分代替固定字符数,块大小 / 重叠调优。
+- **数据刷新**:定时拉新文档、增量入库、过期文档清理。
+
+#### 质量与幻觉治理
+
+- **幻觉检测 / 护栏**:groundedness 校验——答案无检索资料支撑就拦截或降级。
+- **事实核查**:把答案里的论断反向核对检索结果,标出「无出处」的部分。
+
+#### 评测(Eval)
+
+- 分层落地:① 确定性工具 + 工具调用轨迹的 golden 断言(免费、快、硬)→ ② RAG faithfulness(防幻觉,用 Ragas)→ ③ LLM-as-judge 兜底开放答案。
+- 评测集用 YAML,Python 黑盒 harness 打 `/api/chat` 接口,进 CI 做回归。
+
+#### 上下文管理进阶
+
+- **长期记忆 / 记忆分层**:补上「写路径」——从对话抽取跨会话事实存独立表,按相关度检索注入(而不是全量摘要)。
+- **增量摘要**:把当前「每轮从头重摘要」改成「旧摘要 + 新增消息」增量更新。
+- **窗口截断**:用 `LastMaxTokenSizeContentPurger` 做硬上限兜底。
+
+#### 工程化
+
+- 可观测性(tracing / metrics)、模型路由(简单任务走小模型)、成本控制(prompt 缓存 + token 预算)。
+
+#### 结构化输出
+
+- `ChatClient.prompt().entity(...)` + `BeanOutputConverter`,让模型返回受 schema 约束的对象。
+
 ## 技术栈
 
 | 组件 | 版本 |
@@ -69,7 +121,7 @@ curl -X POST http://localhost:8080/api/chat \
   -d '"查一下 alice 的账户状态"'
 ```
 
-`DemoTools` 里的工具会被模型按需调用:
+本地 `@Tool` 工具(按职责拆成计算 / 天气时间 / 用户状态三类)会被模型按需调用:
 
 | 工具 | 说明 |
 | --- | --- |
@@ -108,7 +160,7 @@ curl http://localhost:8080/api/chat/conversations/conv-1
 
 ### 3. MCP Server(把本进程工具暴露出去)
 
-`DemoTools` 里的 `@Tool` 方法会被 `ToolConfig` 包装成 `ToolCallbackProvider`,**自动**由 MCP Server 经 MCP 协议暴露。用 MCP Inspector 验证:
+本地 `@Tool` 方法会被 `ToolConfig` 包装成 `ToolCallbackProvider`,**自动**由 MCP Server 经 MCP 协议暴露。用 MCP Inspector 验证:
 
 ```bash
 npx @modelcontextprotocol/inspector
@@ -129,7 +181,7 @@ app:
       url: http://127.0.0.1:9000/mcp   # 本地 RAG 服务(vikko-rag)
 ```
 
-`McpClientConfig` 用 `McpClient.sync(HttpClientStreamableHttpTransport.builder(...).endpoint(...))` 建立连接,`ChatService` 再用 `SyncMcpToolCallbackProvider` 把远程工具桥接成 `ToolCallback`,通过 `.toolCallbacks(...)` 与本地 `DemoTools` 一起注册。两个外部 Server 各提供:
+`McpClientConfig` 用 `McpClient.sync(HttpClientStreamableHttpTransport.builder(...).endpoint(...))` 建立两个 `McpSyncClient`,分别交给「检索 agent」和「钉钉 agent」,由它们内部用 `SyncMcpToolCallbackProvider` 桥接成 `ToolCallback`。两个外部 Server 各提供:
 
 - **钉钉文档网关**:40 个文档工具(`create_document`、`get_document_content`、`search_documents`、`list_nodes`、`add_permission` 等),覆盖文档/文件夹/知识库的增删改查、权限、版本、导入导出。
 - **本地 RAG 服务**(`vikko-rag`):一个 `rag_query` 工具,基于本地 BGE + milvus-lite 检索知识库,再用 DeepSeek 生成带引用的回答(详见 `vikko-rag` 项目)。
@@ -151,38 +203,37 @@ curl -X POST http://localhost:8080/api/chat \
 > - 钉钉 URL 末尾的 `key` 是访问凭证,建议改成环境变量再注入。
 > - RAG 服务是独立的 Python 进程,需先启动(见 `vikko-rag` 的 README)。
 
+### 5. Multi-Agent(多 agent 协作)
+
+`ChatService` 现在是一个 **planner(主 agent)**,它不再直接挂零散工具,而是挂 5 个**专职子 agent**,通过「agents as tools」模式委派任务:
+
+| 子 agent | 人设 | 挂的工具 |
+| --- | --- | --- |
+| 检索 agent | 知识库研究员 | `rag_query`(RAG MCP) |
+| 钉钉 agent | 钉钉文档助手 | 40 个钉钉工具(钉钉 MCP) |
+| 计算 agent | 数学助手 | `calculate` |
+| 天气时间 agent | 生活助手 | `getWeather` + `getCurrentTime` |
+| 用户管理 agent | 账户管理员 | `queryUserStatus` + `updateUserStatus` |
+
+每个子 agent 内部有自己的 ChatClient + 专属工具 + 人设系统提示词;planner 把任务委派给它们,由它们各自规划执行、返回结果。典型的多步例子:
+
+```bash
+curl -X POST http://localhost:8080/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '"12 乘 8 再加 5"'
+```
+
+这个复合算式会让「计算 agent」分步调用 calculate 工具。核心区别:工具只会「执行一次」,agent 能「自己规划做几步」。
+
 ## 核心概念:函数调用 vs MCP(Server / Client)
 
 同一批「工具」,三种用法,这是本项目想讲清的核心:
 
-- **函数调用(Tool Calling)**:模型在对话过程中,由 `ChatClient` 直接调用本进程内的 `@Tool` 方法(`DemoTools`)。
+- **函数调用(Tool Calling)**:模型在对话过程中,由 `ChatClient` 直接调用本进程内的 `@Tool` 方法(计算 / 天气时间 / 用户状态)。
 - **MCP Server**:把本进程工具经标准协议(JSON-RPC + HTTP)暴露给**任意**外部 MCP 客户端(`ToolConfig` + `/mcp` 端点)。
 - **MCP Client**:反过来,作为客户端去连**外部** MCP Server,把它的远程工具接进自己的 `ChatClient`(`McpClientConfig` + 钉钉网关 / 本地 RAG 服务)。
 
 一句话:函数调用是「模型直接调」;MCP 是「跨进程/跨服务的协议调用」——Server 是把工具**卖**出去,Client 是把工具**买**进来。
-
-## Roadmap(后续计划)
-
-| 模块 | 状态 | 说明 |
-| --- | --- | --- |
-| Tool Calling(函数调用) | ✅ 已完成 | `DemoTools` 5 个 `@Tool`,DeepSeek 按需调用 |
-| MCP Server | ✅ 已完成 | 把本进程工具经 `/mcp` 暴露给外部客户端 |
-| MCP Client | ✅ 已完成 | 连钉钉文档 MCP 网关(40 工具)+ 本地 RAG 服务 |
-| 多轮对话记忆 | ✅ 已完成 | `ChatMemory` + JDBC 持久化到 MySQL |
-| 流式输出(SSE) | ✅ 已完成 | `/memory/stream` 打字机式返回 |
-| Web 前端 | ✅ 已完成 | Vue 3,会话侧边栏 + 流式聊天 |
-| RAG(向量检索)⭐ | ✅ 已完成 | vikko-rag Python 服务:本地 BGE + milvus-lite + DeepSeek,MCP 暴露 |
-| Multi-Agent 编排 | ⬜ 待做 | 单 agent 自主循环(ReAct)→ 多 agent 协作(planner + workers) |
-| 上下文管理 | ⬜ 待做 | 上下文压缩 / 摘要、记忆分层、长对话窗口管理、命中缓存 |
-| 结构化输出(JSON Schema) | ⬜ 待做 | 模型按 schema 返回类型化 JSON(agent 与 RAG 的地基) |
-
-⭐ = 重点学习项。
-
-### 待做项拆解
-
-- **Multi-Agent**:先把 `DemoTools` 交给单个自主 agent(ReAct 多步推理),再用 planner + 专职 worker 做多 agent 协作。
-- **上下文管理**:在现有基础记忆之上,做上下文压缩 / 摘要、记忆分层(短期 vs 长期)、长对话窗口管理、prompt 缓存以省 token。
-- **结构化输出**:`ChatClient.prompt().entity(...)` + `BeanOutputConverter`,让模型返回受 schema 约束的对象。
 
 ## 前端
 
@@ -204,12 +255,20 @@ src/main/java/com/vikko/chat/
 │   ├── OpenApiConfig.java          # Swagger 标题/版本
 │   ├── ToolConfig.java             # MCP Server:把 @Tool 包装成 ToolCallbackProvider
 │   └── McpClientConfig.java        # MCP Client:连接钉钉文档 + 本地 RAG MCP
+├── agent/
+│   ├── ResearchAgent.java          # 检索 agent(挂 RAG)
+│   ├── DingTalkAgent.java          # 钉钉 agent(挂 40 个钉钉工具)
+│   ├── CalculatorAgent.java        # 计算 agent
+│   ├── WeatherTimeAgent.java       # 天气/时间 agent
+│   └── UserAdminAgent.java         # 用户管理 agent
 ├── tool/
-│   ├── DemoTools.java              # @Tool 工具集(函数调用 + MCP 共用)
+│   ├── CalculatorTools.java        # calculate
+│   ├── WeatherTimeTools.java       # getWeather / getCurrentTime
+│   ├── UserStatusTools.java        # query / update user status
 │   └── UserStatus.java             # 账户状态枚举
 ├── chat/
 │   ├── ChatController.java         # /api/chat 系列接口
-│   ├── ChatService.java            # ChatClient 装配 + 记忆 + 远程工具桥接
+│   ├── ChatService.java            # planner(主 agent):挂 5 个子 agent + 记忆
 │   └── dto/                        # 请求/响应 DTO(record)
 ├── mapper/
 │   ├── ConversationMapper.java     # 会话列表(按最近活跃排序)
