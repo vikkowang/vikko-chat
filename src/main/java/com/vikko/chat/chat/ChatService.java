@@ -22,8 +22,8 @@ import reactor.core.publisher.Flux;
 @Service
 public class ChatService {
 
-    // 显式 ReAct 循环的 planner(总调度)
-    private final Planner planner;
+    // 编排器工厂:按 app.planner.mode 提供编排器
+    private final PlannerFactory plannerFactory;
     // 上下文摘要压缩:历史过长时把早期对话摘要掉
     private final ConversationSummarizer summarizer;
     // 由 Spring AI 自动装配:有 JDBC 仓库时持久化到 MySQL,否则退化为内存实现
@@ -33,13 +33,18 @@ public class ChatService {
     // 会话按最近活跃时间倒序
     private final ConversationMapper conversationMapper;
 
-    public ChatService(Planner planner, ConversationSummarizer summarizer, ChatMemory chatMemory,
+    public ChatService(PlannerFactory plannerFactory, ConversationSummarizer summarizer, ChatMemory chatMemory,
             ChatMemoryRepository chatMemoryRepository, ConversationMapper conversationMapper) {
-        this.planner = planner;
+        this.plannerFactory = plannerFactory;
         this.summarizer = summarizer;
         this.chatMemory = chatMemory;
         this.chatMemoryRepository = chatMemoryRepository;
         this.conversationMapper = conversationMapper;
+    }
+
+    /** 从工厂取当前编排器。 */
+    private AgentOrchestrator planner() {
+        return plannerFactory.get();
     }
 
     /**
@@ -47,7 +52,7 @@ public class ChatService {
      */
     public String chat(String message) {
         log.info("单轮对话: {}", message);
-        return planner.plan(message);
+        return planner().plan(message);
     }
 
     /**
@@ -57,7 +62,7 @@ public class ChatService {
         String conversationId = request.getConversationId() == null ? "default" : request.getConversationId();
         log.info("多轮对话 [{}]: {}", conversationId, request.getMessage());
         List<Message> history = chatMemory.get(conversationId);
-        String answer = planner.plan(summarizer.compress(history), request.getMessage());
+        String answer = planner().plan(summarizer.compress(history), request.getMessage());
         chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
         return answer;
     }
@@ -70,7 +75,7 @@ public class ChatService {
         String conversationId = request.getConversationId() == null ? "default" : request.getConversationId();
         log.info("多轮流式对话 [{}]: {}", conversationId, request.getMessage());
         List<Message> history = chatMemory.get(conversationId);
-        String answer = planner.plan(summarizer.compress(history), request.getMessage());
+        String answer = planner().plan(summarizer.compress(history), request.getMessage());
         chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
         return Flux.just(answer);
     }
