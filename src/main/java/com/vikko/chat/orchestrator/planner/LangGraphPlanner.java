@@ -1,4 +1,4 @@
-package com.vikko.chat.chat;
+package com.vikko.chat.orchestrator.planner;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import com.vikko.chat.agent.Agent;
+import com.vikko.chat.orchestrator.AgentOrchestrator;
 import lombok.extern.slf4j.Slf4j;
 import org.bsc.langgraph4j.CompileConfig;
 import org.bsc.langgraph4j.CompiledGraph;

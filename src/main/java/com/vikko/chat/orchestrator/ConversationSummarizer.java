@@ -1,4 +1,4 @@
-package com.vikko.chat.chat;
+package com.vikko.chat.orchestrator;
 
 import java.util.ArrayList;
 import java.util.List;

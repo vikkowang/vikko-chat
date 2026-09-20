@@ -14,10 +14,12 @@ MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**
 | 多轮记忆 + 流式 + 前端 | ✅ | `ChatMemory` + JDBC、SSE、Vue 3 |
 | RAG(基础)⭐ | ✅ | vikko-rag:本地 BGE + milvus-lite + DeepSeek,MCP 暴露 |
 | Multi-Agent 编排 ⭐ | ✅ | planner + 5 个专职 agent(检索/钉钉/计算/天气时间/用户管理),agents-as-tools |
-| ReAct 循环 ⭐ | ✅ | 手写「思考→行动→观察」循环,每步 Action/Observation 打日志,替换 ChatClient 隐式循环 |
+| ReAct 循环 ⭐ | ✅ | 显式「思考→行动→观察」循环,每步 Action/Observation 打日志,替换 ChatClient 隐式循环 |
+| LangGraph4j 编排 | ✅ | 用 StateGraph 两节点图表达同一个 ReAct 循环,与手写版经 `app.planner.mode` 切换 |
+| Advisor 管道 | ✅ | ChatClient + advisor 链(蜜罐/安全/摘要记忆/日志/幻觉/脱敏),第三种编排实现 |
 | 上下文管理 ⭐ | 🟡 部分 | 摘要压缩已做;长期记忆 / 增量摘要 / 窗口截断待做 |
-| RAG 进阶 ⭐ | ⬜ | 重排 / 混合检索 / 查询改写 / 切分优化 / 定时拉新 |
-| 质量与幻觉治理 | ⬜ | 幻觉检测 / 护栏 / 事实核查 |
+| RAG 进阶 ⭐ | ✅ | 重排 / 混合检索 / 查询改写 / 切分优化 / 定时拉新(vikko-rag) |
+| 质量与幻觉治理 | 🟡 部分 | 幻觉检测(浅版,GroundednessAdvisor)已做;事实核查 / 护栏待做 |
 | 评测(Eval) | ⬜ | golden 断言 → RAG faithfulness → LLM-as-judge → CI 回归 |
 | 结构化输出 | ⬜ | JSON Schema 约束的返回 |
 | 工程化 | ⬜ | 可观测 / 模型路由 / 成本控制 |
@@ -63,6 +65,7 @@ MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**
 | Java | 21 |
 | Spring Boot | 3.5.16 |
 | Spring AI | 1.1.8(含 MCP server / client starter) |
+| LangGraph4j | 1.9.0(图编排,ReAct 的框架化实现) |
 | LLM | DeepSeek(`deepseek-chat`) |
 | 数据库 | MySQL(JDBC + MyBatis 3.0.5) |
 | 接口文档 | springdoc-openapi 2.8.17(Swagger UI) |
@@ -102,7 +105,7 @@ MCP 这条线既是 **Server**(把本进程工具暴露出去),也是 **Client**
 | POST | `/api/chat` | 单轮对话(请求体直接传字符串) |
 | POST | `/api/chat/memory` | 多轮对话,按 conversationId 保留上下文 |
 | POST | `/api/chat/memory/stream` | 多轮流式对话(SSE) |
-| GET | `/api/chat/conversations` | 会话列表 |
+| GET | `/api/chat/conversations?page=0&size=20` | 会话列表(分页,返回 `{ items, hasMore }`) |
 | GET | `/api/chat/conversations/{conversationId}` | 加载某会话历史 |
 
 ## 四个演示
@@ -151,10 +154,10 @@ curl -X POST http://localhost:8080/api/chat/memory \
 
 `POST /api/chat/memory/stream` 逻辑相同,只是以 SSE 流式返回,前端据此打字机式渲染。
 
-会话列表与历史:
+会话列表(分页:`?page=0&size=20`,返回 `{ items, hasMore }`)与历史:
 
 ```bash
-curl http://localhost:8080/api/chat/conversations
+curl 'http://localhost:8080/api/chat/conversations?page=0&size=20'
 curl http://localhost:8080/api/chat/conversations/conv-1
 ```
 
@@ -225,6 +228,25 @@ curl -X POST http://localhost:8080/api/chat \
 
 这个复合算式会让「计算 agent」分步调用 calculate 工具。核心区别:工具只会「执行一次」,agent 能「自己规划做几步」。
 
+planner 本身有**三种编排实现**,通过 `application.yml` 的 `app.planner.mode`(环境变量 `PLANNER_MODE`)切换,默认 `advisor`:
+
+- `react`:手写 ReAct 循环(`ReActPlanner`);
+- `langgraph`:LangGraph4j 两节点图(`LangGraphPlanner`);
+- `advisor`:ChatClient + advisor 链(`AdvisorPlanner`)。
+
+三者共用同一套 5 个子 agent + 系统提示词,由 `PlannerFactory` 多选一(见 `orchestrator/` 包)。`advisor` 模式的记忆由 `SummarizingMemoryAdvisor` 自动读写(含摘要压缩),其余两种仍由 `ChatService` 手动管理。
+
+`advisor` 模式的 advisor 链(按执行顺序,共 6 个):
+
+| advisor | 阶段 | 作用 |
+| --- | --- | --- |
+| `HoneypotAdvisor` | before / after | 蜜罐对抗:埋 token,检测提示注入泄露 |
+| `SafeGuardAdvisor` | before | 输入敏感词拦截(命中 `app.guard.sensitive-words` 即拒答) |
+| `SummarizingMemoryAdvisor` | before / after | 加载历史 + 超长历史摘要压缩(替代内置 `MessageChatMemoryAdvisor`) |
+| `SimpleLoggerAdvisor` | before / after | 请求 / 响应日志 |
+| `GroundednessAdvisor` | after | 幻觉检测(浅版):无出处回答追加「请核实」警示 |
+| `SensitiveDataAdvisor` | after | 输出脱敏:正则打码 PII |
+
 ## 核心概念:函数调用 vs MCP(Server / Client)
 
 同一批「工具」,三种用法,这是本项目想讲清的核心:
@@ -268,8 +290,21 @@ src/main/java/com/vikko/chat/
 │   └── UserStatus.java             # 账户状态枚举
 ├── chat/
 │   ├── ChatController.java         # /api/chat 系列接口
-│   ├── ChatService.java            # planner(主 agent):挂 5 个子 agent + 记忆
+│   ├── ChatService.java            # 总调度入口:挂编排器 + 记忆 + 摘要压缩
 │   └── dto/                        # 请求/响应 DTO(record)
+├── orchestrator/
+│   ├── AgentOrchestrator.java      # 编排抽象接口(共用系统提示词)
+│   ├── PlannerFactory.java         # 按 app.planner.mode 选编排器
+│   ├── ConversationSummarizer.java # 上下文摘要压缩
+│   ├── planner/
+│   │   ├── ReActPlanner.java       # 手写 ReAct 循环实现
+│   │   ├── LangGraphPlanner.java   # LangGraph4j 两节点图实现
+│   │   └── AdvisorPlanner.java     # ChatClient + advisor 链实现(挂 6 个 advisor)
+│   └── advisor/
+│       ├── HoneypotAdvisor.java          # 蜜罐对抗 advisor(提示注入检测)
+│       ├── SummarizingMemoryAdvisor.java # 带摘要压缩的记忆 advisor
+│       ├── GroundednessAdvisor.java      # 幻觉检测 advisor(浅版)
+│       └── SensitiveDataAdvisor.java     # 内容脱敏 advisor(输出正则打码)
 ├── mapper/
 │   ├── ConversationMapper.java     # 会话列表(按最近活跃排序)
 │   └── UserStatusMapper.java       # 查/改 user_status 表

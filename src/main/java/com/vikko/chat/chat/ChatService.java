@@ -8,6 +8,10 @@ import com.vikko.chat.chat.dto.ChatRequest;
 import com.vikko.chat.chat.dto.ConversationDto;
 import com.vikko.chat.chat.dto.ConversationPageDto;
 import com.vikko.chat.mapper.ConversationMapper;
+import com.vikko.chat.orchestrator.planner.AdvisorPlanner;
+import com.vikko.chat.orchestrator.AgentOrchestrator;
+import com.vikko.chat.orchestrator.ConversationSummarizer;
+import com.vikko.chat.orchestrator.PlannerFactory;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
@@ -61,9 +65,16 @@ public class ChatService {
     public String chatWithMemory(ChatRequest request) {
         String conversationId = request.getConversationId() == null ? "default" : request.getConversationId();
         log.info("多轮对话 [{}]: {}", conversationId, request.getMessage());
-        List<Message> history = chatMemory.get(conversationId);
-        String answer = planner().plan(summarizer.compress(history), request.getMessage());
-        chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+        AgentOrchestrator orchestrator = planner();
+        String answer;
+        if (orchestrator instanceof AdvisorPlanner advisorPlanner) {
+            // advisor 模式:记忆由 SummarizingMemoryAdvisor 自动读写(含摘要压缩),这里不再手动 get/add
+            answer = advisorPlanner.planWithMemory(conversationId, request.getMessage());
+        } else {
+            List<Message> history = chatMemory.get(conversationId);
+            answer = orchestrator.plan(summarizer.compress(history), request.getMessage());
+            chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+        }
         return answer;
     }
 
@@ -74,9 +85,16 @@ public class ChatService {
     public Flux<String> chatWithMemoryStream(ChatRequest request) {
         String conversationId = request.getConversationId() == null ? "default" : request.getConversationId();
         log.info("多轮流式对话 [{}]: {}", conversationId, request.getMessage());
-        List<Message> history = chatMemory.get(conversationId);
-        String answer = planner().plan(summarizer.compress(history), request.getMessage());
-        chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+        AgentOrchestrator orchestrator = planner();
+        String answer;
+        if (orchestrator instanceof AdvisorPlanner advisorPlanner) {
+            // advisor 模式:记忆由 SummarizingMemoryAdvisor 自动读写(含摘要压缩),这里不再手动 get/add
+            answer = advisorPlanner.planWithMemory(conversationId, request.getMessage());
+        } else {
+            List<Message> history = chatMemory.get(conversationId);
+            answer = orchestrator.plan(summarizer.compress(history), request.getMessage());
+            chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+        }
         return Flux.just(answer);
     }
 
