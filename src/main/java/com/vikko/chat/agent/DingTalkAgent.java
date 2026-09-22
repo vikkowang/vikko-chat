@@ -24,7 +24,7 @@ public class DingTalkAgent implements Agent {
 
     @Tool(description = "操作钉钉文档/知识库:搜索、读取、创建、编辑、整理、移动、删除、权限管理等。适合任何涉及钉钉文档的任务。")
     public String operateDocuments(String instruction) {
-        return client.prompt()
+        return cap(client.prompt()
                 .system("""
                         你是钉钉文档助手,负责对钉钉文档和知识库进行操作。
                         要求:
@@ -35,6 +35,6 @@ public class DingTalkAgent implements Agent {
                 .user(instruction)
                 .toolCallbacks(dingTalkProvider)
                 .call()
-                .content();
+                .content());
     }
 }

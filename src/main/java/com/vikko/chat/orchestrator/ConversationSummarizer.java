@@ -47,7 +47,10 @@ public class ConversationSummarizer {
         }
         int splitAt = history.size() - KEEP_RECENT;
         List<Message> oldPart = history.subList(0, splitAt);
-        List<Message> recent = history.subList(splitAt, history.size());
+        // 工具结果清理:压缩时把历史里的工具调用/结果消息一并清掉(深层历史已调用过的工具,原始结果没必要再看)
+        List<Message> recent = history.subList(splitAt, history.size()).stream()
+                .filter(m -> m.getMessageType() == MessageType.USER || m.getMessageType() == MessageType.ASSISTANT)
+                .toList();
 
         String summary = summarize(oldPart);
         log.info("上下文压缩:{} 条历史 → 摘要 {} 字 + 最近 {} 条原文", oldPart.size(), summary.length(), recent.size());

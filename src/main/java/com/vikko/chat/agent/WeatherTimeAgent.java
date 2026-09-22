@@ -22,7 +22,7 @@ public class WeatherTimeAgent implements Agent {
 
     @Tool(description = "查询某个城市的天气,或某个时区的当前时间,并结合结果给出简短生活建议。")
     public String queryWeatherOrTime(String question) {
-        return client.prompt()
+        return cap(client.prompt()
                 .system("""
                         你是生活助手,负责查询天气和时区时间。
                         要求:
@@ -33,6 +33,6 @@ public class WeatherTimeAgent implements Agent {
                 .user(question)
                 .tools(weatherTimeTools)
                 .call()
-                .content();
+                .content());
     }
 }

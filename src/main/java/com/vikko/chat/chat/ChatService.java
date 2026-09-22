@@ -1,5 +1,6 @@
 package com.vikko.chat.chat;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -8,6 +9,7 @@ import com.vikko.chat.chat.dto.ChatRequest;
 import com.vikko.chat.chat.dto.ConversationDto;
 import com.vikko.chat.chat.dto.ConversationPageDto;
 import com.vikko.chat.mapper.ConversationMapper;
+import com.vikko.chat.mapper.TaskStateMapper;
 import com.vikko.chat.orchestrator.planner.AdvisorPlanner;
 import com.vikko.chat.orchestrator.AgentOrchestrator;
 import com.vikko.chat.orchestrator.ConversationSummarizer;
@@ -18,6 +20,7 @@ import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -36,14 +39,18 @@ public class ChatService {
     private final ChatMemoryRepository chatMemoryRepository;
     // 会话按最近活跃时间倒序
     private final ConversationMapper conversationMapper;
+    // 任务进度(结构化笔记):状态栏注入用
+    private final TaskStateMapper taskStateMapper;
 
     public ChatService(PlannerFactory plannerFactory, ConversationSummarizer summarizer, ChatMemory chatMemory,
-            ChatMemoryRepository chatMemoryRepository, ConversationMapper conversationMapper) {
+            ChatMemoryRepository chatMemoryRepository, ConversationMapper conversationMapper,
+            TaskStateMapper taskStateMapper) {
         this.plannerFactory = plannerFactory;
         this.summarizer = summarizer;
         this.chatMemory = chatMemory;
         this.chatMemoryRepository = chatMemoryRepository;
         this.conversationMapper = conversationMapper;
+        this.taskStateMapper = taskStateMapper;
     }
 
     /** 从工厂取当前编排器。 */
@@ -51,12 +58,28 @@ public class ChatService {
         return plannerFactory.get();
     }
 
+    /** 状态栏:把任务进度作为一条 system 消息注入历史末尾(靠近用户消息,不破坏稳定前缀)。 */
+    private List<Message> withStatusBar(String conversationId, List<Message> history) {
+        String progress = taskStateMapper.findProgressByConversationId(conversationId);
+        if (progress == null || progress.isBlank()) {
+            return history;
+        }
+        List<Message> withStatus = new ArrayList<>(history);
+        withStatus.add(new SystemMessage("【任务进度】" + progress));
+        return withStatus;
+    }
+
     /**
      * 单轮:每次请求独立,不保留历史上下文。
      */
     public String chat(String message) {
         log.info("单轮对话: {}", message);
-        return planner().plan(message);
+        ConversationContext.set("default");
+        try {
+            return planner().plan(message);
+        } finally {
+            ConversationContext.clear();
+        }
     }
 
     /**
@@ -65,17 +88,22 @@ public class ChatService {
     public String chatWithMemory(ChatRequest request) {
         String conversationId = request.getConversationId() == null ? "default" : request.getConversationId();
         log.info("多轮对话 [{}]: {}", conversationId, request.getMessage());
-        AgentOrchestrator orchestrator = planner();
-        String answer;
-        if (orchestrator instanceof AdvisorPlanner advisorPlanner) {
-            // advisor 模式:记忆由 SummarizingMemoryAdvisor 自动读写(含摘要压缩),这里不再手动 get/add
-            answer = advisorPlanner.planWithMemory(conversationId, request.getMessage());
-        } else {
-            List<Message> history = chatMemory.get(conversationId);
-            answer = orchestrator.plan(summarizer.compress(history), request.getMessage());
-            chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+        ConversationContext.set(conversationId);
+        try {
+            AgentOrchestrator orchestrator = planner();
+            String answer;
+            if (orchestrator instanceof AdvisorPlanner advisorPlanner) {
+                // advisor 模式:记忆由 SummarizingMemoryAdvisor 自动读写(含摘要压缩),这里不再手动 get/add
+                answer = advisorPlanner.planWithMemory(conversationId, request.getMessage());
+            } else {
+                List<Message> history = chatMemory.get(conversationId);
+                answer = orchestrator.plan(withStatusBar(conversationId, summarizer.compress(history)), request.getMessage());
+                chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+            }
+            return answer;
+        } finally {
+            ConversationContext.clear();
         }
-        return answer;
     }
 
     /**
@@ -85,17 +113,22 @@ public class ChatService {
     public Flux<String> chatWithMemoryStream(ChatRequest request) {
         String conversationId = request.getConversationId() == null ? "default" : request.getConversationId();
         log.info("多轮流式对话 [{}]: {}", conversationId, request.getMessage());
-        AgentOrchestrator orchestrator = planner();
-        String answer;
-        if (orchestrator instanceof AdvisorPlanner advisorPlanner) {
-            // advisor 模式:记忆由 SummarizingMemoryAdvisor 自动读写(含摘要压缩),这里不再手动 get/add
-            answer = advisorPlanner.planWithMemory(conversationId, request.getMessage());
-        } else {
-            List<Message> history = chatMemory.get(conversationId);
-            answer = orchestrator.plan(summarizer.compress(history), request.getMessage());
-            chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+        ConversationContext.set(conversationId);
+        try {
+            AgentOrchestrator orchestrator = planner();
+            String answer;
+            if (orchestrator instanceof AdvisorPlanner advisorPlanner) {
+                // advisor 模式:记忆由 SummarizingMemoryAdvisor 自动读写(含摘要压缩),这里不再手动 get/add
+                answer = advisorPlanner.planWithMemory(conversationId, request.getMessage());
+            } else {
+                List<Message> history = chatMemory.get(conversationId);
+                answer = orchestrator.plan(withStatusBar(conversationId, summarizer.compress(history)), request.getMessage());
+                chatMemory.add(conversationId, List.of(new UserMessage(request.getMessage()), new AssistantMessage(answer)));
+            }
+            return Flux.just(answer);
+        } finally {
+            ConversationContext.clear();
         }
-        return Flux.just(answer);
     }
 
     /**

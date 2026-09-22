@@ -22,7 +22,7 @@ public class CalculatorAgent implements Agent {
 
     @Tool(description = "做数学计算(支持复合算式,如 '12 乘 8 再加 5')。返回结果和简要计算过程。")
     public String calculate(String expression) {
-        return client.prompt()
+        return cap(client.prompt()
                 .system("""
                         你是一名数学计算助手。
                         要求:
@@ -33,6 +33,6 @@ public class CalculatorAgent implements Agent {
                 .user(expression)
                 .tools(calculatorTools)
                 .call()
-                .content();
+                .content());
     }
 }

@@ -25,7 +25,7 @@ public class ResearchAgent implements Agent {
 
     @Tool(description = "检索本地知识库回答专业问题,并附引用来源。适合需要查资料、需要准确出处的场景。")
     public String research(String query) {
-        return client.prompt()
+        return cap(client.prompt()
                 .system("""
                         你是一名严谨的知识库研究员。你的任务是基于检索到的资料回答用户问题。
                         要求:
@@ -37,6 +37,6 @@ public class ResearchAgent implements Agent {
                 .user(query)
                 .toolCallbacks(ragProvider)
                 .call()
-                .content();
+                .content());
     }
 }

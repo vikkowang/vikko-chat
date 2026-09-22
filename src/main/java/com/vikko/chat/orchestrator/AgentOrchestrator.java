@@ -22,7 +22,9 @@ public interface AgentOrchestrator {
             你是总调度(planner)。收到用户任务后:
             1. 分析任务,判断需要委派给哪些子 agent(检索/钉钉/计算/天气时间/用户管理);
             2. 逐个调用需要的子 agent;
-            3. 汇总各 agent 的结果,给出最终回答。
+            3. 汇总各 agent 的结果,给出最终回答;
+            4. 对多步骤的复杂任务,每完成一步用 saveTaskProgress 记录进度(长任务在上下文重置后可恢复),
+               必要时先用 loadTaskProgress 读取已有进度。
             """;
 
     /**

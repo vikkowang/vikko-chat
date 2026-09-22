@@ -1,6 +1,7 @@
 package com.vikko.chat.config;
 
 import com.vikko.chat.tool.CalculatorTools;
+import com.vikko.chat.tool.TaskStateTools;
 import com.vikko.chat.tool.UserStatusTools;
 import com.vikko.chat.tool.WeatherTimeTools;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -19,9 +20,9 @@ public class ToolConfig {
      */
     @Bean
     public ToolCallbackProvider demoToolCallbackProvider(CalculatorTools calculatorTools,
-            WeatherTimeTools weatherTimeTools, UserStatusTools userStatusTools) {
+            WeatherTimeTools weatherTimeTools, UserStatusTools userStatusTools, TaskStateTools taskStateTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(calculatorTools, weatherTimeTools, userStatusTools)
+                .toolObjects(calculatorTools, weatherTimeTools, userStatusTools, taskStateTools)
                 .build();
     }
 }

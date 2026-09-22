@@ -3,11 +3,13 @@ package com.vikko.chat.orchestrator.planner;
 import java.util.List;
 
 import com.vikko.chat.agent.Agent;
+import com.vikko.chat.mapper.TaskStateMapper;
 import com.vikko.chat.orchestrator.AgentOrchestrator;
 import com.vikko.chat.orchestrator.ConversationSummarizer;
 import com.vikko.chat.orchestrator.advisor.GroundednessAdvisor;
 import com.vikko.chat.orchestrator.advisor.HoneypotAdvisor;
 import com.vikko.chat.orchestrator.advisor.SensitiveDataAdvisor;
+import com.vikko.chat.orchestrator.advisor.StatusBarAdvisor;
 import com.vikko.chat.orchestrator.advisor.SummarizingMemoryAdvisor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ai.chat.client.ChatClient;
@@ -31,6 +33,7 @@ import org.springframework.stereotype.Component;
  *   <li>{@link HoneypotAdvisor}:蜜罐对抗,提示注入检测;</li>
  *   <li>{@link SafeGuardAdvisor}:输入敏感词拦截(命中即拒答);</li>
  *   <li>{@link SummarizingMemoryAdvisor}:自动加载 / 保存对话历史,并对超长历史做摘要压缩;</li>
+ *   <li>{@link StatusBarAdvisor}:状态栏,注入任务进度;</li>
  *   <li>{@link SimpleLoggerAdvisor}:打印请求 / 响应日志;</li>
  *   <li>{@link GroundednessAdvisor}:幻觉检测(浅版,无出处回答追加警示);</li>
  *   <li>{@link SensitiveDataAdvisor}:输出内容脱敏(正则打码 PII)。</li>
@@ -45,7 +48,7 @@ public class AdvisorPlanner implements AgentOrchestrator {
     private final ChatClient client;
 
     public AdvisorPlanner(ChatClient.Builder builder, List<Agent> agents, ChatMemory chatMemory,
-            ConversationSummarizer summarizer,
+            ConversationSummarizer summarizer, TaskStateMapper taskStateMapper,
             @Value("${app.guard.sensitive-words:}") List<String> sensitiveWords) {
         ToolCallback[] toolCallbacks = ToolCallbacks.from(agents.toArray());
         this.client = builder
@@ -54,6 +57,7 @@ public class AdvisorPlanner implements AgentOrchestrator {
                         new HoneypotAdvisor(),
                         new SafeGuardAdvisor(sensitiveWords),
                         new SummarizingMemoryAdvisor(chatMemory, summarizer),
+                        new StatusBarAdvisor(taskStateMapper),
                         new SimpleLoggerAdvisor(),
                         new GroundednessAdvisor(),
                         new SensitiveDataAdvisor())
