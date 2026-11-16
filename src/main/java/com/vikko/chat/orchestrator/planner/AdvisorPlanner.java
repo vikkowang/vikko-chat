@@ -2,9 +2,9 @@ package com.vikko.chat.orchestrator.planner;
 
 import java.util.List;
 
-import com.vikko.chat.agent.Agent;
 import com.vikko.chat.mapper.TaskStateMapper;
 import com.vikko.chat.orchestrator.AgentOrchestrator;
+import com.vikko.chat.orchestrator.AgentToolRetriever;
 import com.vikko.chat.orchestrator.ConversationSummarizer;
 import com.vikko.chat.orchestrator.advisor.GroundednessAdvisor;
 import com.vikko.chat.orchestrator.advisor.HoneypotAdvisor;
@@ -17,7 +17,6 @@ import org.springframework.ai.chat.client.advisor.SafeGuardAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
@@ -46,13 +45,13 @@ public class AdvisorPlanner implements AgentOrchestrator {
     private static final String DEFAULT_CONVERSATION_ID = "default";
 
     private final ChatClient client;
+    private final AgentToolRetriever retriever;
 
-    public AdvisorPlanner(ChatClient.Builder builder, List<Agent> agents, ChatMemory chatMemory,
+    public AdvisorPlanner(ChatClient.Builder builder, AgentToolRetriever retriever, ChatMemory chatMemory,
             ConversationSummarizer summarizer, TaskStateMapper taskStateMapper,
             @Value("${app.guard.sensitive-words:}") List<String> sensitiveWords) {
-        ToolCallback[] toolCallbacks = ToolCallbacks.from(agents.toArray());
+        this.retriever = retriever;
         this.client = builder
-                .defaultToolCallbacks(toolCallbacks)
                 .defaultAdvisors(
                         new HoneypotAdvisor(),
                         new SafeGuardAdvisor(sensitiveWords),
@@ -72,8 +71,10 @@ public class AdvisorPlanner implements AgentOrchestrator {
 
     /** 走 advisor 链的多轮入口:记忆由 {@link SummarizingMemoryAdvisor} 自动读写(含压缩)。 */
     public String planWithMemory(String conversationId, String userMessage) {
+        ToolCallback[] selected = retriever.retrieve(userMessage, AgentToolRetriever.DEFAULT_TOP_K);
         return client.prompt()
-                .system(SYSTEM_PROMPT)
+                .system(AgentOrchestrator.systemPrompt(selected))
+                .toolCallbacks(selected)
                 .user(userMessage)
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversationId))
                 .call()

@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import com.vikko.chat.agent.Agent;
 import com.vikko.chat.orchestrator.AgentOrchestrator;
+import com.vikko.chat.orchestrator.AgentToolRetriever;
 import lombok.extern.slf4j.Slf4j;
 import org.bsc.langgraph4j.CompileConfig;
 import org.bsc.langgraph4j.CompiledGraph;
@@ -27,7 +27,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
-import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
@@ -68,8 +67,8 @@ import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
  * </ul>
  *
  * <h2>和手写版共用什么</h2>
- * 完全复用同一套:{@code ChatModel} + {@code ToolCallingManager} + 5 个子 agent(经
- * {@link ToolCallbacks#from} 转成工具回调)+ {@link AgentOrchestrator#SYSTEM_PROMPT} 人设。
+ * 完全复用同一套:{@code ChatModel} + {@code ToolCallingManager} + {@link AgentToolRetriever}
+ * (按请求检索子 agent 工具)+ {@link AgentOrchestrator#systemPrompt} 动态人设。
  * 因此两版<b>行为一致</b>,只是「编排壳」不同(手写 for 循环 vs 图)。
  *
  * <h2>三个实现细节</h2>
@@ -102,6 +101,8 @@ public class LangGraphPlanner implements AgentOrchestrator {
     private static final String MESSAGES = "messages";
     /** 状态里存放最终答案的键(也是图结束的信号)。 */
     private static final String ANSWER = "answer";
+    /** 状态里存放本次请求检索出的工具子集的键(普通键,无 channel)。 */
+    private static final String TOOLS = "toolCallbacks";
     /** 递归上限:记账含 START/END 等每次节点访问,20 约允许 8 个工具回合(手写版是 10 步)。 */
     private static final int RECURSION_LIMIT = 20;
 
@@ -109,30 +110,32 @@ public class LangGraphPlanner implements AgentOrchestrator {
     private final ChatModel chatModel;
     // 工具执行器:executeToolCalls() 负责「单步」执行工具
     private final ToolCallingManager toolCallingManager;
-    // 所有子 agent 转成的工具回调(与 ReActPlanner 完全相同)
-    private final ToolCallback[] toolCallbacks;
+    // 工具检索器:每次请求按语义挑相关 agent,替代一次性全量挂载
+    private final AgentToolRetriever retriever;
     // 编译后的图:节点/边在构造期定义好,运行期只调用 invoke
     private final CompiledGraph<PlannerState> graph;
 
-    public LangGraphPlanner(ChatModel chatModel, ToolCallingManager toolCallingManager, List<Agent> agents) {
+    public LangGraphPlanner(ChatModel chatModel, ToolCallingManager toolCallingManager, AgentToolRetriever retriever) {
         this.chatModel = chatModel;
         this.toolCallingManager = toolCallingManager;
-        this.toolCallbacks = ToolCallbacks.from(agents.toArray());
+        this.retriever = retriever;
         this.graph = buildGraph();
     }
 
     @Override
     public String plan(List<Message> history, String userMessage) {
-        // 组装初始上下文(与手写版一致):系统人设 + 历史 + 用户消息,作为图的初始状态
+        ToolCallback[] selected = retriever.retrieve(userMessage, AgentToolRetriever.DEFAULT_TOP_K);
+        // 组装初始上下文(与手写版一致):系统人设(含本次可用工具)+ 历史 + 用户消息,作为图的初始状态
         List<Message> initial = new ArrayList<>();
-        initial.add(new SystemMessage(SYSTEM_PROMPT));
+        initial.add(new SystemMessage(AgentOrchestrator.systemPrompt(selected)));
         initial.addAll(history);
         initial.add(new UserMessage(userMessage));
         try {
             // 跑图:从 START → agent 开始,按条件边在 agent/tools 之间循环,直到写 answer 走 END。
             // disableCloneState():关闭 LangGraph4j 每个节点后的状态克隆。克隆用 Java 序列化,
             // 而 Spring AI Message 不可序列化会抛 NotSerializableException;节点内已做防御性拷贝,禁用它安全。
-            PlannerState result = graph.invoke(Map.of(MESSAGES, initial),
+            // TOOLS 键把本次检索出的工具子集带进 state,供 agent/tools 节点读取(替代构造期的全量字段)。
+            PlannerState result = graph.invoke(Map.of(MESSAGES, initial, TOOLS, selected),
                             RunnableConfig.builder().disableCloneState().build())
                     .orElseThrow(() -> new IllegalStateException("LangGraph 执行未产出最终状态"));
             return result.answer().orElse("达到最大迭代次数,任务未完成。");
@@ -188,8 +191,9 @@ public class LangGraphPlanner implements AgentOrchestrator {
      */
     private Map<String, Object> agent(PlannerState state) {
         List<Message> messages = new ArrayList<>(state.messages());
+        ToolCallback[] selected = state.<ToolCallback[]>value(TOOLS).orElse(new ToolCallback[0]);
         ToolCallingChatOptions options = ToolCallingChatOptions.builder()
-                .toolCallbacks(toolCallbacks)
+                .toolCallbacks(selected)
                 .internalToolExecutionEnabled(false)
                 .build();
         ChatResponse response = chatModel.call(new Prompt(messages, options));
@@ -219,8 +223,9 @@ public class LangGraphPlanner implements AgentOrchestrator {
         List<Message> messages = new ArrayList<>(state.messages());
         AssistantMessage assistantMessage = (AssistantMessage) messages.get(messages.size() - 1);
 
+        ToolCallback[] selected = state.<ToolCallback[]>value(TOOLS).orElse(new ToolCallback[0]);
         ToolCallingChatOptions options = ToolCallingChatOptions.builder()
-                .toolCallbacks(toolCallbacks)
+                .toolCallbacks(selected)
                 .internalToolExecutionEnabled(false)
                 .build();
         Prompt prompt = new Prompt(messages, options);

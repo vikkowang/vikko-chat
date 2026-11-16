@@ -37,7 +37,7 @@ class UserStatusToolsTest {
         when(mapper.updateStatusByUsername("bob", "BANNED")).thenReturn(1);
         UserStatusTools tools = new UserStatusTools(mapper);
 
-        assertEquals("bob 的状态已更新为: 封禁", tools.updateUserStatus("bob", "BANNED"));
+        assertEquals("bob 的状态已更新为: 封禁", tools.updateUserStatus("bob", "BANNED", null));
     }
 
     @Test
@@ -45,7 +45,7 @@ class UserStatusToolsTest {
         UserStatusMapper mapper = mock(UserStatusMapper.class);
         UserStatusTools tools = new UserStatusTools(mapper);
 
-        String result = tools.updateUserStatus("bob", "BAD");
+        String result = tools.updateUserStatus("bob", "BAD", null);
         assertTrue(result.startsWith("不支持的状态: BAD"), "实际: " + result);
     }
 
@@ -55,6 +55,6 @@ class UserStatusToolsTest {
         when(mapper.updateStatusByUsername("nobody", "ACTIVE")).thenReturn(0);
         UserStatusTools tools = new UserStatusTools(mapper);
 
-        assertEquals("未找到用户: nobody", tools.updateUserStatus("nobody", "ACTIVE"));
+        assertEquals("未找到用户: nobody", tools.updateUserStatus("nobody", "ACTIVE", null));
     }
 }

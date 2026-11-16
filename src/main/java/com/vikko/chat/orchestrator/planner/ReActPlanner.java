@@ -3,8 +3,8 @@ package com.vikko.chat.orchestrator.planner;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.vikko.chat.agent.Agent;
 import com.vikko.chat.orchestrator.AgentOrchestrator;
+import com.vikko.chat.orchestrator.AgentToolRetriever;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -16,7 +16,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
-import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
 
@@ -45,20 +44,21 @@ public class ReActPlanner implements AgentOrchestrator {
     private final ChatModel chatModel;
     // 工具执行器:executeToolCalls() 负责「单步」执行工具
     private final ToolCallingManager toolCallingManager;
-    // 所有子 agent 转成的工具回调(通过 Agent 接口 List 注入)
-    private final ToolCallback[] toolCallbacks;
+    // 工具检索器:每次请求按语义挑相关 agent,替代一次性全量挂载
+    private final AgentToolRetriever retriever;
 
-    public ReActPlanner(ChatModel chatModel, ToolCallingManager toolCallingManager, List<Agent> agents) {
+    public ReActPlanner(ChatModel chatModel, ToolCallingManager toolCallingManager, AgentToolRetriever retriever) {
         this.chatModel = chatModel;
         this.toolCallingManager = toolCallingManager;
-        this.toolCallbacks = ToolCallbacks.from(agents.toArray());
+        this.retriever = retriever;
     }
 
     @Override
     public String plan(List<Message> history, String userMessage) {
-        // 组装初始上下文:系统人设 + 历史 + 用户消息
+        ToolCallback[] selected = retriever.retrieve(userMessage, AgentToolRetriever.DEFAULT_TOP_K);
+        // 组装初始上下文:系统人设(含本次可用工具)+ 历史 + 用户消息
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(SYSTEM_PROMPT));
+        messages.add(new SystemMessage(AgentOrchestrator.systemPrompt(selected)));
         messages.addAll(history);
         messages.add(new UserMessage(userMessage));
 
@@ -66,7 +66,7 @@ public class ReActPlanner implements AgentOrchestrator {
         for (int step = 0; step < MAX_STEPS; step++) {
             // internalToolExecutionEnabled(false):模型只返回工具调用、不自动执行
             ToolCallingChatOptions options = ToolCallingChatOptions.builder()
-                    .toolCallbacks(toolCallbacks)
+                    .toolCallbacks(selected)
                     .internalToolExecutionEnabled(false)
                     .build();
             Prompt prompt = new Prompt(messages, options);
